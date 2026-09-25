@@ -1,0 +1,4 @@
+discord_forum_output.local.toml
+__pycache__/
+*.py[cod]
+.DS_Store

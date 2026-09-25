@@ -1,0 +1,19 @@
+# Copy to discord_forum_output.local.toml and replace only the placeholders.
+[webhook]
+url_env = "COMFY_DISCORD_FORUM_WEBHOOK_URL"
+# url = "https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN"
+
+[limits]
+max_upload_bytes = 8388608
+max_attachments_per_request = 10
+caption_max_chars = 1800
+request_timeout_seconds = 30
+max_transient_retries = 2
+
+[destinations]
+# Map destination alias to the Discord thread snowflake ID
+showcase = "123456789012345678"
+# Alternatively table syntax: general = { thread_id = "123456789012345678" }
+
+[forum_tags]
+finished = "345678901234567890"
