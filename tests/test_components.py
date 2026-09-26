@@ -32,6 +32,10 @@ def settings():
     return Settings("https://discord.com/api/webhooks/123456789012345678/SECRET", {"x": "123456789012345678"}, {})
 
 
+def node_result(value):
+    return value["result"]
+
+
 class ComponentsTest(unittest.TestCase):
     def test_web_directory_omitted_for_headless_node(self):
         self.assertFalse(hasattr(package, "WEB_DIRECTORY"))
@@ -111,7 +115,7 @@ class ComponentsTest(unittest.TestCase):
             def send(self, _images, caption, **_kwargs): captions.append(caption)
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=configured), patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", Client):
             result = node.send(torch.zeros((1, 2, 2, 3)), "x", caption_enabled=True, prompt="manual prompt", seed=7, model_or_checkpoint="manual.ckpt", steps=12, cfg=2.5, sampler="heun", scheduler="karras", prompt_graph=graph, unique_id="discord")
-        self.assertEqual(result[1:], (1, 0))
+        self.assertEqual(node_result(result)[1:], (1, 0))
         self.assertEqual(captions, ["manual prompt\nseed: 7 | model: manual.ckpt | resolution: 2x2 | steps: 12 | CFG: 2.5 | sampler: heun | scheduler: karras"])
 
     def test_node_new_schema_call_uses_runtime_metadata_without_manual_arguments(self):
@@ -129,7 +133,7 @@ class ComponentsTest(unittest.TestCase):
             def send(self, _images, caption, **_kwargs): captions.append(caption)
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=configured), patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", Client):
             result = node.send(torch.zeros((1, 2, 2, 3)), "x", caption_enabled=True, prompt_graph=graph, unique_id="discord")
-        self.assertEqual(result[1:], (1, 0))
+        self.assertEqual(node_result(result)[1:], (1, 0))
         self.assertEqual(captions, ["runtime prompt\nseed: 42 | model: runtime.safetensors | resolution: 2x2 | steps: 20 | CFG: 7.0 | sampler: euler | scheduler: normal"])
 
     def test_config_env_precedence_validation_and_redaction(self):
@@ -158,7 +162,7 @@ class ComponentsTest(unittest.TestCase):
             def send(self, _images, _caption, **kwargs): sent.append(kwargs["thread_id"])
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=configured), patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", Client):
             result = node.send(torch.zeros((1, 2, 2, 3)), "x", caption_enabled=False, existing_thread_id="testing")
-        self.assertEqual(result[1:], (1, 0))
+        self.assertEqual(node_result(result)[1:], (1, 0))
         self.assertEqual(sent, ["123456789012345678"])
 
     def test_redaction_covers_url_path_and_standalone_token(self):
@@ -247,11 +251,12 @@ class ComponentsTest(unittest.TestCase):
         node = DiscordForumOutput()
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", side_effect=ConfigError("webhook URL is not configured")):
             result = node.send(torch.zeros((2, 2, 2, 3)), "", "existing_thread", "one_message_per_image", "png", 95, False, "", 0, "", 0, 0.0, "", "", "", "")
-        self.assertEqual(result[1:], (0, 2))
-        self.assertIn("webhook URL is not configured", result[0])
+        self.assertEqual(result["ui"]["status"], [node_result(result)[0]])
+        self.assertEqual(node_result(result)[1:], (0, 2))
+        self.assertIn("webhook URL is not configured", node_result(result)[0])
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", side_effect=ConfigError("webhook URL is not configured")):
             result = node.send(torch.zeros((2, 2, 2, 3)), "", "existing_thread", "single_message", "png", 95, False, "", 0, "", 0, 0.0, "", "", "", "")
-        self.assertEqual(result[1:], (0, 1))
+        self.assertEqual(node_result(result)[1:], (0, 1))
 
     def test_node_titles_include_original_batch_indexes_and_never_truncate(self):
         node, sent = DiscordForumOutput(), []
@@ -262,10 +267,10 @@ class ComponentsTest(unittest.TestCase):
         args = (torch.zeros((2, 2, 2, 3)), "", "new_forum_post", "one_message_per_image", "png", 95, False, "", 0, "", 0, 0.0, "", "")
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=configured), patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", Client):
             result = node.send(*args, "x" * 94, "")
-        self.assertEqual(result[1:], (2, 0)); self.assertEqual(sent, ["x" * 94 + " (1/2)", "x" * 94 + " (2/2)"])
+        self.assertEqual(node_result(result)[1:], (2, 0)); self.assertEqual(sent, ["x" * 94 + " (1/2)", "x" * 94 + " (2/2)"])
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=configured):
             result = node.send(*args, "x" * 95, "")
-        self.assertEqual(result[1:], (0, 2)); self.assertIn("image 1", result[0]); self.assertIn("image 2", result[0])
+        self.assertEqual(node_result(result)[1:], (0, 2)); self.assertIn("image 1", node_result(result)[0]); self.assertIn("image 2", node_result(result)[0])
 
     def test_node_single_message_counts_messages_and_releases_buffers(self):
         node, sent, made = DiscordForumOutput(), [], []
@@ -280,23 +285,23 @@ class ComponentsTest(unittest.TestCase):
         args = (torch.zeros((2, 2, 2, 3)), "x", "existing_thread", "single_message", "png", 95, False, "", 0, "", 0, 0.0, "", "", "", "")
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=configured), patch("discord_forum_node.nodes.discord_forum_output.encode_image", side_effect=encoder), patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", Client):
             result = node.send(*args)
-        self.assertEqual(result[1:], (0, 1)); self.assertFalse(sent); self.assertTrue(all(not item.data for item in made))
+        self.assertEqual(node_result(result)[1:], (0, 1)); self.assertFalse(sent); self.assertTrue(all(not item.data for item in made))
         made.clear()
         oversized = Settings("https://discord.com/api/webhooks/123456789012345678/SECRET", {"x": "123456789012345678"}, {}, max_upload_bytes=3)
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=oversized), patch("discord_forum_node.nodes.discord_forum_output.encode_image", side_effect=encoder), patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", Client):
             result = node.send(*args)
-        self.assertEqual(result[1:], (0, 1)); self.assertFalse(sent); self.assertTrue(all(not item.data for item in made))
+        self.assertEqual(node_result(result)[1:], (0, 1)); self.assertFalse(sent); self.assertTrue(all(not item.data for item in made))
         configured = Settings("https://discord.com/api/webhooks/123456789012345678/SECRET", {"x": "123456789012345678"}, {})
         made.clear()
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=configured), patch("discord_forum_node.nodes.discord_forum_output.encode_image", side_effect=encoder), patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", Client):
             result = node.send(*args)
-        self.assertEqual(result[1:], (1, 0)); self.assertEqual(len(sent), 1); self.assertTrue(all(not item.data for item in made))
+        self.assertEqual(node_result(result)[1:], (1, 0)); self.assertEqual(len(sent), 1); self.assertTrue(all(not item.data for item in made))
         class FailingClient:
             def __init__(self, _settings): pass
             def send(self, *_args, **_kwargs): raise DeliveryError("failed")
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=configured), patch("discord_forum_node.nodes.discord_forum_output.encode_image", side_effect=encoder), patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", FailingClient):
             result = node.send(*args)
-        self.assertEqual(result[1:], (0, 1)); self.assertIn("single_message: failed", result[0])
+        self.assertEqual(node_result(result)[1:], (0, 1)); self.assertIn("single_message: failed", node_result(result)[0])
 
 
 if __name__ == "__main__":

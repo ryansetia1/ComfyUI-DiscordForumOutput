@@ -105,7 +105,7 @@ def _conditioning_prompt(graph: "_Graph", source: Any) -> str | None:
 
 
 def _model_name(graph: "_Graph", source: Any) -> str | None:
-    loader = graph.nearest(source, {"CheckpointLoader", "CheckpointLoaderSimple", "UNETLoader"})
+    loader = graph.nearest(source, {"CheckpointLoader", "CheckpointLoaderSimple", "UNETLoader", "UnetLoaderGGUF"})
     if loader is None:
         return None
     inputs = _inputs(graph.node(loader))

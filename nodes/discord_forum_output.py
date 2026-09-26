@@ -142,4 +142,7 @@ class DiscordForumOutput:
         compact_detail = re.sub("\\s+", " ", detail)[:500]
         status = f"uploaded={uploaded} failed={failed}" + (f"; {compact_detail}" if detail else "")
         LOGGER.info("%s", status)
-        return (status, uploaded, failed)
+        return {
+            "ui": {"status": [status]},
+            "result": (status, uploaded, failed),
+        }
