@@ -303,6 +303,66 @@ class ComponentsTest(unittest.TestCase):
             result = node.send(*args)
         self.assertEqual(node_result(result)[1:], (0, 1)); self.assertIn("single_message: failed", node_result(result)[0])
 
+    def test_caption_formats_lora_and_duration_correctly(self):
+        # Single LoRA
+        c1 = render_caption(prompt="cat", seed=1, model_or_checkpoint="model.safetensors", width=512, height=512, steps=20, cfg=7.0, sampler="euler", scheduler="normal", maximum=500, loras=[("sub/detail.safetensors", 0.8)], duration=14.2)
+        self.assertEqual(c1, "cat\nseed: 1 | model: model.safetensors | lora: detail.safetensors (0.8) | resolution: 512x512 | steps: 20 | CFG: 7.0 | sampler: euler | scheduler: normal | duration: 14.2s")
+
+        # Multiple LoRAs and duration > 60s
+        c2 = render_caption(prompt="sunset", seed=2, model_or_checkpoint="flux.gguf", width=1024, height=768, steps=4, cfg=1.0, sampler="euler", scheduler="simple", maximum=500, loras=[("snofs.safetensors", 1.0), ("path/realistic.safetensors", 0.25)], duration=84.0)
+        self.assertEqual(c2, "sunset\nseed: 2 | model: flux.gguf | loras: snofs.safetensors (1.0), realistic.safetensors (0.25) | resolution: 1024x768 | steps: 4 | CFG: 1.0 | sampler: euler | scheduler: simple | duration: 1m 24s")
+
+    def test_runtime_metadata_extracts_chained_loras(self):
+        graph = {
+            "discord": {"class_type": "DiscordForumOutput", "inputs": {"images": ["decode", 0]}},
+            "decode": {"class_type": "VAEDecode", "inputs": {"samples": ["sampler", 0]}},
+            "sampler": {"class_type": "KSampler", "inputs": {"model": ["lora2", 0], "seed": 100, "steps": 20, "cfg": 7.0, "sampler_name": "euler", "scheduler": "normal", "positive": ["pos", 0]}},
+            "pos": {"class_type": "CLIPTextEncode", "inputs": {"text": "portrait"}},
+            "lora2": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["lora1", 0], "lora_name": "flux/realistic.safetensors", "strength_model": 0.3}},
+            "lora1": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["unet", 0], "lora_name": "klein_snofs.safetensors", "strength_model": 1.0}},
+            "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux.safetensors"}},
+        }
+        metadata = extract_metadata(graph, "discord")
+        self.assertEqual(metadata.model_or_checkpoint, "flux.safetensors")
+        self.assertEqual(metadata.loras, (("klein_snofs.safetensors", 1.0), ("flux/realistic.safetensors", 0.3)))
+
+    def test_runtime_metadata_extracts_lora_with_custom_flux_sampler(self):
+        graph = {
+            "discord": {"class_type": "DiscordForumOutput", "inputs": {"images": ["decode", 0]}},
+            "decode": {"class_type": "VAEDecode", "inputs": {"samples": ["sample", 0]}},
+            "sample": {"class_type": "SamplerCustomAdvanced", "inputs": {"noise": ["noise", 0], "guider": ["guider", 0], "sampler": ["selector", 0], "sigmas": ["schedule", 0]}},
+            "noise": {"class_type": "RandomNoise", "inputs": {"noise_seed": 777}},
+            "guider": {"class_type": "BasicGuider", "inputs": {"model": ["lora", 0], "conditioning": ["pos", 0]}},
+            "pos": {"class_type": "CLIPTextEncode", "inputs": {"text": "flux art"}},
+            "lora": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["unet", 0], "lora_name": "style_lora.safetensors", "strength_model": 0.75}},
+            "unet": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": "flux-klein.gguf"}},
+            "selector": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+            "schedule": {"class_type": "BasicScheduler", "inputs": {"model": ["unet", 0], "scheduler": "simple", "steps": 4}},
+        }
+        metadata = extract_metadata(graph, "discord")
+        self.assertEqual(metadata.model_or_checkpoint, "flux-klein.gguf")
+        self.assertEqual(metadata.loras, (("style_lora.safetensors", 0.75),))
+
+    def test_send_includes_lora_and_duration_in_discord_caption(self):
+        node, captions = DiscordForumOutput(), []
+        graph = {
+            "discord": {"class_type": "DiscordForumOutput", "inputs": {"images": ["decode", 0]}},
+            "decode": {"class_type": "VAEDecode", "inputs": {"samples": ["sampler", 0]}},
+            "sampler": {"class_type": "KSampler", "inputs": {"model": ["lora", 0], "seed": 99, "steps": 10, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "positive": ["pos", 0]}},
+            "pos": {"class_type": "CLIPTextEncode", "inputs": {"text": "magic meadow"}},
+            "lora": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["ckpt", 0], "lora_name": "fantasy.safetensors", "strength_model": 0.8}},
+            "ckpt": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
+        }
+        configured = Settings("https://discord.com/api/webhooks/123456789012345678/SECRET", {"x": "123456789012345678"}, {})
+        class Client:
+            def __init__(self, _settings): pass
+            def send(self, _images, caption, **_kwargs): captions.append(caption)
+        with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=configured), patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", Client):
+            result = node.send(torch.zeros((1, 2, 2, 3)), "x", caption_enabled=True, prompt_graph=graph, unique_id="discord", duration=15.4)
+        self.assertEqual(node_result(result)[1:], (1, 0))
+        self.assertEqual(captions, ["magic meadow\nseed: 99 | model: base.safetensors | lora: fantasy.safetensors (0.8) | resolution: 2x2 | steps: 10 | CFG: 1.0 | sampler: euler | scheduler: simple | duration: 15.4s"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

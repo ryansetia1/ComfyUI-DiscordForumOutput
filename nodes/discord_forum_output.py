@@ -7,11 +7,17 @@ import traceback
 from ..discord_forum_output.caption import render_caption
 from ..discord_forum_output.config import ConfigError, load_settings, resolve_destination, resolve_tags
 from ..discord_forum_output.image_encoder import ImageEncodingError, encode_image
-from ..discord_forum_output.prompt_metadata import RuntimeMetadata, extract_metadata
+from ..discord_forum_output.prompt_metadata import (
+    RuntimeMetadata,
+    ensure_execution_timer_hook,
+    extract_metadata,
+    resolve_duration,
+)
 from ..discord_forum_output.webhook_client import DeliveryError, WebhookClient
 
 LOGGER = logging.getLogger("ComfyUI-DiscordForumOutput")
 TITLE_MAX = 100
+ensure_execution_timer_hook()
 
 
 class DiscordForumOutput:
@@ -46,7 +52,7 @@ class DiscordForumOutput:
             return "new_thread_title is required for new_forum_post"
         return True
 
-    def send(self, images, destination_alias="", delivery_mode="existing_thread", batch_mode="one_message_per_image", image_format="png", jpeg_quality=95, caption_enabled=True, prompt="", seed=0, model_or_checkpoint="", steps=0, cfg=0.0, sampler="", scheduler="", new_thread_title="", forum_tag_aliases="", existing_thread_id="", prompt_graph=None, unique_id=None, **kwargs):
+    def send(self, images, destination_alias="", delivery_mode="existing_thread", batch_mode="one_message_per_image", image_format="png", jpeg_quality=95, caption_enabled=True, prompt="", seed=0, model_or_checkpoint="", steps=0, cfg=0.0, sampler="", scheduler="", new_thread_title="", forum_tag_aliases="", existing_thread_id="", prompt_graph=None, unique_id=None, loras=None, duration=None, generation_duration=None, **kwargs):
         uploaded = failed = 0
         notes: list[str] = []
         try:
@@ -69,7 +75,8 @@ class DiscordForumOutput:
             count = 1 if batch_mode == "single_message" else int(images.shape[0]) if getattr(images, "ndim", None) == 4 else 1
             return self._result(0, count, str(error))
         batch_size = int(images.shape[0])
-        metadata = self._metadata(prompt_graph, unique_id, prompt, seed, model_or_checkpoint, steps, cfg, sampler, scheduler)
+        resolved_dur = duration if duration is not None else generation_duration
+        metadata = self._metadata(prompt_graph, unique_id, prompt, seed, model_or_checkpoint, steps, cfg, sampler, scheduler, loras=loras, duration=resolved_dur)
         if title and batch_mode == "one_message_per_image" and batch_size > 1:
             invalid = [index for index in range(1, batch_size + 1) if len(f"{title} ({index}/{batch_size})") > TITLE_MAX]
             if invalid:
@@ -98,7 +105,7 @@ class DiscordForumOutput:
         client = WebhookClient(settings)
         for unit in units:
             original_index, image = unit[0]
-            caption = render_caption(prompt=metadata.prompt or "", seed=metadata.seed, model_or_checkpoint=metadata.model_or_checkpoint or "", width=image.width, height=image.height, steps=metadata.steps or 0, cfg=metadata.cfg or 0, sampler=metadata.sampler or "", scheduler=metadata.scheduler or "", maximum=settings.caption_max_chars) if caption_enabled else ""
+            caption = render_caption(prompt=metadata.prompt or "", seed=metadata.seed, model_or_checkpoint=metadata.model_or_checkpoint or "", width=image.width, height=image.height, steps=metadata.steps or 0, cfg=metadata.cfg or 0, sampler=metadata.sampler or "", scheduler=metadata.scheduler or "", maximum=settings.caption_max_chars, loras=metadata.loras, duration=metadata.duration) if caption_enabled else ""
             unit_title = f"{title} ({original_index}/{batch_size})" if title and batch_mode == "one_message_per_image" and batch_size > 1 else title
             try:
                 client.send([entry[1] for entry in unit], caption, thread_id=thread_id, thread_name=unit_title, applied_tags=tags)
@@ -125,8 +132,10 @@ class DiscordForumOutput:
             image.data = b""
 
     @staticmethod
-    def _metadata(prompt_graph, unique_id, prompt, seed, model_or_checkpoint, steps, cfg, sampler, scheduler) -> RuntimeMetadata:
+    def _metadata(prompt_graph, unique_id, prompt, seed, model_or_checkpoint, steps, cfg, sampler, scheduler, loras=None, duration=None) -> RuntimeMetadata:
         runtime = extract_metadata(prompt_graph, unique_id)
+        resolved_loras = loras if loras is not None else runtime.loras
+        resolved_duration = resolve_duration(duration) if duration is not None else runtime.duration
         return RuntimeMetadata(
             prompt=str(prompt).strip() or runtime.prompt,
             seed=int(seed) if int(seed) != 0 else runtime.seed,
@@ -135,6 +144,8 @@ class DiscordForumOutput:
             cfg=float(cfg) if float(cfg) > 0 else runtime.cfg,
             sampler=str(sampler).strip() or runtime.sampler,
             scheduler=str(scheduler).strip() or runtime.scheduler,
+            loras=resolved_loras,
+            duration=resolved_duration,
         )
 
     @staticmethod
