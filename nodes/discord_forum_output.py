@@ -4,7 +4,7 @@ import logging
 import re
 import traceback
 
-from ..discord_forum_output.cleanup import cleanup
+from ..discord_forum_output.cleanup import schedule as schedule_cleanup
 from ..discord_forum_output.caption import render_caption
 from ..discord_forum_output.config import ConfigError, load_settings, resolve_destination, resolve_tags
 from ..discord_forum_output.image_encoder import ImageEncodingError, encode_image
@@ -126,8 +126,10 @@ class DiscordForumOutput:
                 unit.clear()
         if image_format == "png":
             notes.append("jpeg_quality ignored for PNG")
+        if cleanup_after_send and not (uploaded and not failed):
+            LOGGER.info("Discord cleanup skipped: delivery was not fully successful")
         if cleanup_after_send and uploaded and not failed:
-            cleanup(prompt_graph)
+            schedule_cleanup(prompt_graph)
         return self._result(uploaded, failed, "; ".join(notes))
 
     @staticmethod
