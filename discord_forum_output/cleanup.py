@@ -51,6 +51,21 @@ def input_files(prompt_graph, input_dir) -> list[Path]:
     return list(found)
 
 
+def purge_candidates(input_dir, cutoff: float) -> list[Path]:
+    """Old image files in the input root, ``clipspace/`` and ``rsg-*`` folders.
+
+    Other subfolders (e.g. ``pixaroma/``, ``3d/``) belong to other tools and are
+    never touched. Files newer than ``cutoff`` (uploaded after this job was
+    queued, so possibly meant for the next job) are kept.
+    """
+    root = Path(input_dir).resolve()
+    paths = [p for p in root.iterdir() if p.is_file()]
+    for folder in root.iterdir():
+        if folder.is_dir() and not folder.is_symlink() and (folder.name == "clipspace" or folder.name.startswith("rsg-")):
+            paths += [p for p in folder.rglob("*") if p.is_file()]
+    return [p for p in paths if p.suffix.lower() in IMAGE_EXTS and not p.is_symlink() and p.stat().st_mtime < cutoff]
+
+
 def clear_dir(directory) -> None:
     for child in Path(directory).iterdir():
         if child.is_dir() and not child.is_symlink():
@@ -78,13 +93,14 @@ def current_prompt_id():
         return None
 
 
-def run(prompt_graph, others) -> str:
-    """Delete this job's inputs (minus any another job needs), then temp if idle."""
+def run(prompt_graph, others, cutoff=None) -> str:
+    """Delete this job's inputs and stale input images (minus any another job needs), then temp if idle."""
     import folder_paths
     input_dir = folder_paths.get_input_directory()
     needed = {p for graph in others for p in input_files(graph, input_dir)}
     removed = 0
-    for path in input_files(prompt_graph, input_dir):
+    stale = purge_candidates(input_dir, cutoff) if cutoff else []
+    for path in dict.fromkeys([*input_files(prompt_graph, input_dir), *stale]):
         if path in needed:
             continue
         try:
@@ -98,7 +114,7 @@ def run(prompt_graph, others) -> str:
     return f"removed {removed} input file(s); temp cleared"
 
 
-def after_job(prompt_id, prompt_graph) -> None:
+def after_job(prompt_id, prompt_graph, cutoff=None) -> None:
     """Wait for the job to finish, then clean. Never raises."""
     try:
         deadline = time.monotonic() + TIMEOUT_SECONDS
@@ -109,9 +125,20 @@ def after_job(prompt_id, prompt_graph) -> None:
             time.sleep(POLL_SECONDS)
         time.sleep(GRACE_SECONDS)  # let the frontend finish loading previews
         running, pending = _queue()
-        LOGGER.info("Discord cleanup: %s", run(prompt_graph, [item[2] for item in (*running, *pending)]))
+        LOGGER.info("Discord cleanup: %s", run(prompt_graph, [item[2] for item in (*running, *pending)], cutoff))
     except Exception as error:
         LOGGER.warning("Discord cleanup failed: %s", error)
+
+
+def queued_at(prompt_id):
+    """Epoch seconds when ComfyUI queued the job, or None."""
+    try:
+        for item in _queue()[0]:
+            if item[1] == prompt_id and isinstance(item[3], dict) and item[3].get("create_time"):
+                return item[3]["create_time"] / 1000.0
+    except Exception:
+        pass
+    return None
 
 
 def schedule(prompt_graph) -> None:
@@ -119,4 +146,4 @@ def schedule(prompt_graph) -> None:
     if prompt_id is None:
         LOGGER.warning("Discord cleanup skipped: cannot tell which job is running")
         return
-    threading.Thread(target=after_job, args=(prompt_id, prompt_graph), daemon=True, name="discord-cleanup").start()
+    threading.Thread(target=after_job, args=(prompt_id, prompt_graph, queued_at(prompt_id)), daemon=True, name="discord-cleanup").start()

@@ -86,8 +86,9 @@ that virtualenv for tests and import checks.
 
 With `cleanup_after_send` on (default), once every image was delivered the node waits for the job to leave ComfyUI's running set (plus a 2 s grace so the frontend finishes loading previews), then:
 
-- deletes every image file under ComfyUI's `input/` that a node input of the graph names (subfolders allowed; `[output]`/`[temp]` references, absolute paths, `..` and symlinks pointing outside are ignored). The four files the mask editor saves per edit (`clipspace-mask|paint|painted|painted-masked-<id>.png`) are removed together even though the graph names only one of them. The original image that was edited is not named by the graph and is kept.
-- keeps files that another running or queued job still references;
+- deletes every image file under ComfyUI's `input/` that a node input of the graph names (subfolders allowed; `[output]`/`[temp]` references, absolute paths, `..` and symlinks pointing outside are ignored), together with the four files the mask editor saves per edit (`clipspace-mask|paint|painted|painted-masked-<id>.png`);
+- also purges **every other image** in the `input/` root, `input/clipspace/` and `input/rsg-*/` that existed before this job was queued, which removes the original of a mask-edited image. Images uploaded after the job was queued (possibly for the next job) and all other subfolders (e.g. `pixaroma/`, `3d/`) are never touched;
+- keeps any file that another running or queued job still references;
 - clears `temp/` only when no other job is running or queued.
 
-If the queue cannot be read nothing is deleted. Any delivery failure skips cleanup entirely. Each run logs one `Discord cleanup: ...` line (or the reason it was skipped); cleanup errors never change the Discord result.
+If the queue cannot be read nothing is deleted. Any delivery failure skips cleanup entirely. Each run logs one `Discord cleanup: ...` line (or the reason it was skipped); cleanup errors never change the Discord result. Turn `cleanup_after_send` off to keep everything.

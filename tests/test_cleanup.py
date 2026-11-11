@@ -87,6 +87,47 @@ class CleanupTest(unittest.TestCase):
         mod.run(g, [])
         self.assertEqual(list(self.temp.iterdir()), [])
 
+    # --- purge of stale inputs ---------------------------------------------
+    def age(self, rel, seconds_ago):
+        import os, time
+        path = self.input / rel
+        os.utime(path, (time.time() - seconds_ago,) * 2)
+
+    def test_purge_removes_old_images_in_scope_only(self):
+        (self.input / "clipspace").mkdir(); (self.input / "pixaroma").mkdir(); (self.input / "3d").mkdir()
+        for rel in ("clipspace/c.png", "pixaroma/project.png", "3d/m.png", "notes.txt"):
+            (self.input / rel).write_bytes(b"x")
+        for rel in ("rsg-inpaint/a.png", "keep.png", "orig.png", "clipspace/c.png", "pixaroma/project.png", "3d/m.png", "notes.txt"):
+            self.age(rel, 600)
+        import time
+        mod.run({}, [], cutoff=time.time() - 60)
+        gone = lambda rel: not (self.input / rel).exists()
+        self.assertTrue(all(gone(r) for r in ("rsg-inpaint/a.png", "keep.png", "orig.png", "clipspace/c.png")))
+        self.assertFalse(any(gone(r) for r in ("pixaroma/project.png", "3d/m.png", "notes.txt")))
+
+    def test_purge_keeps_files_newer_than_the_job_and_files_other_jobs_use(self):
+        import time
+        for rel in ("rsg-inpaint/a.png", "keep.png"):
+            self.age(rel, 600)
+        # orig.png was uploaded after the job was queued: possibly for the next job
+        mod.run({}, [graph("keep.png")], cutoff=time.time() - 60)
+        self.assertTrue((self.input / "keep.png").exists())      # used by a queued job
+        self.assertTrue((self.input / "orig.png").exists())      # newer than the cutoff
+        self.assertFalse((self.input / "rsg-inpaint" / "a.png").exists())
+
+    def test_without_a_cutoff_nothing_unreferenced_is_purged(self):
+        self.age("orig.png", 600)
+        mod.run(graph("keep.png"), [])
+        self.assertTrue((self.input / "orig.png").exists())
+        self.assertFalse((self.input / "keep.png").exists())
+
+    def test_queued_at_reads_create_time_from_the_running_item(self):
+        running = [(0, "me", {}, {"create_time": 1_700_000_000_000}, [])]
+        server = self.fake_server((running, []))
+        with patch.dict(sys.modules, {"server": server}):
+            self.assertEqual(mod.queued_at("me"), 1_700_000_000.0)
+            self.assertIsNone(mod.queued_at("other"))
+
     # --- after_job ---------------------------------------------------------
     def fake_server(self, *snapshots):
         """PromptServer whose queue returns each (running, pending) snapshot in turn, then the last."""
@@ -138,7 +179,7 @@ class CleanupTest(unittest.TestCase):
         thread = MagicMock()
         with patch.object(mod, "current_prompt_id", return_value="me"), patch.object(mod.threading, "Thread", return_value=thread) as make:
             mod.schedule({"g": 1})
-        self.assertEqual(make.call_args.kwargs["args"], ("me", {"g": 1})); self.assertTrue(make.call_args.kwargs["daemon"])
+        self.assertEqual(make.call_args.kwargs["args"][:2], ("me", {"g": 1})); self.assertTrue(make.call_args.kwargs["daemon"])
         thread.start.assert_called_once()
         with patch.object(mod, "current_prompt_id", return_value=None), patch.object(mod.threading, "Thread") as make:
             mod.schedule({}); make.assert_not_called()
