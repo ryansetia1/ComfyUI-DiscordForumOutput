@@ -45,6 +45,10 @@ class CleanupTest(unittest.TestCase):
         graph["9"] = {"class_type": "KSampler", "inputs": {"image": "keep.png"}}
         self.assertEqual(mod.input_files(graph, self.input), [self.input / "rsg-inpaint" / "a.png"])
 
+    def test_absolute_and_temp_annotated_names_are_rejected(self):
+        graph = self.graph(str(self.root / "outside.png"), "keep.png [temp]", "keep.png[output]")
+        self.assertEqual(mod.input_files(graph, self.input), [])
+
     def test_symlink_pointing_outside_is_rejected(self):
         (self.input / "link.png").symlink_to(self.root / "outside.png")
         self.assertEqual(mod.input_files(self.graph("link.png"), self.input), [])
@@ -52,7 +56,7 @@ class CleanupTest(unittest.TestCase):
     def run_node(self, graph, **kwargs):
         with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=CONFIGURED), \
                 patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", Client), \
-                patch.object(mod, "other_jobs_active", return_value=kwargs.pop("busy", False)):
+                patch.object(mod, "other_prompts", return_value=kwargs.pop("others", [])):
             return DiscordForumOutput().send(torch.zeros((1, 2, 2, 3)), "x", caption_enabled=False, prompt_graph=graph, **kwargs)
 
     def test_success_deletes_inputs_and_temp_only(self):
@@ -68,8 +72,24 @@ class CleanupTest(unittest.TestCase):
         self.assertTrue((self.input / "rsg-inpaint" / "a.png").exists())
         self.assertTrue((self.temp / "preview.png").exists())
 
-    def test_busy_queue_keeps_temp_but_deletes_inputs(self):
-        self.run_node(self.graph("rsg-inpaint/a.png"), busy=True)
+    def test_busy_queue_keeps_temp_but_deletes_unshared_inputs(self):
+        self.run_node(self.graph("rsg-inpaint/a.png"), others=[self.graph("keep.png")])
+        self.assertFalse((self.input / "rsg-inpaint" / "a.png").exists())
+        self.assertTrue((self.temp / "preview.png").exists())
+
+    def test_input_still_used_by_a_queued_job_is_kept(self):
+        self.run_node(self.graph("rsg-inpaint/a.png"), others=[self.graph("rsg-inpaint/a.png [input]")])
+        self.assertTrue((self.input / "rsg-inpaint" / "a.png").exists())
+
+    def test_unreadable_queue_deletes_nothing(self):
+        self.run_node(self.graph("rsg-inpaint/a.png"), others=None)
+        self.assertTrue((self.input / "rsg-inpaint" / "a.png").exists())
+        self.assertTrue((self.temp / "preview.png").exists())
+
+    def test_graph_with_preview_node_keeps_temp(self):
+        graph = self.graph("rsg-inpaint/a.png")
+        graph["p"] = {"class_type": "PreviewImage", "inputs": {}}
+        self.run_node(graph)
         self.assertFalse((self.input / "rsg-inpaint" / "a.png").exists())
         self.assertTrue((self.temp / "preview.png").exists())
 
@@ -83,8 +103,17 @@ class CleanupTest(unittest.TestCase):
             result = self.run_node(self.graph("rsg-inpaint/a.png"))
         self.assertEqual(node_result(result)[1:], (1, 0))
 
-    def test_unreadable_queue_counts_as_busy(self):
-        self.assertTrue(mod.other_jobs_active())
+    def test_other_prompts_excludes_current_job_and_includes_the_rest(self):
+        current, other, queued = {"c": 1}, {"o": 1}, {"q": 1}
+        queue = types.SimpleNamespace(get_current_queue=lambda: ([(0, "a", current, {}, [])], [(1, "b", queued, {}, [])]))
+        running_other = types.SimpleNamespace(get_current_queue=lambda: ([(0, "a", current, {}, []), (1, "x", other, {}, [])], []))
+        for q, expected in ((queue, [queued]), (running_other, [other])):
+            server = types.SimpleNamespace(PromptServer=types.SimpleNamespace(instance=types.SimpleNamespace(prompt_queue=q)))
+            with patch.dict(sys.modules, {"server": server}):
+                self.assertEqual(mod.other_prompts(current), expected)
+
+    def test_unreadable_queue_returns_none(self):
+        self.assertIsNone(mod.other_prompts({}))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from pathlib import Path
 
@@ -20,13 +21,14 @@ def input_files(prompt_graph, input_dir) -> list[Path]:
         name = (node.get("inputs") or {}).get("image")
         if not isinstance(name, str) or not name.strip():
             continue
-        if name.endswith(" [input]"):
-            name = name[: -len(" [input]")]
-        elif name.endswith(("[output]", "[temp]")):
-            continue
+        annotated = re.search(r"\s*\[(input|output|temp)\]$", name)
+        if annotated:
+            if annotated.group(1) != "input":
+                continue
+            name = name[: annotated.start()]
         path = (root / name).resolve()
         # resolve() follows symlinks, so links pointing outside are rejected too.
-        if path != root and path.is_relative_to(root) and path.is_file():
+        if path.is_relative_to(root) and path.is_file():
             found[path] = None
     return list(found)
 
@@ -39,26 +41,35 @@ def clear_dir(directory) -> None:
             child.unlink(missing_ok=True)
 
 
-def other_jobs_active() -> bool:
-    """True when another job runs or waits; assume busy if the queue is unreadable."""
+def other_prompts(prompt_graph):
+    """Graphs of every other running or queued job, or None if the queue is unreadable."""
     try:
         from server import PromptServer
         running, pending = PromptServer.instance.prompt_queue.get_current_queue()
-        return len(running) > 1 or len(pending) > 0
+        return [item[2] for item in (*running, *pending) if item[2] is not prompt_graph]
     except Exception:
-        return True
+        return None
 
 
 def cleanup(prompt_graph) -> None:
     """Delete the job's input images, then temp if idle. Never raises."""
     try:
         import folder_paths
-        for path in input_files(prompt_graph, folder_paths.get_input_directory()):
+        others = other_prompts(prompt_graph)
+        if others is None:  # cannot tell what else needs these files: delete nothing
+            return
+        input_dir = folder_paths.get_input_directory()
+        needed = {path for graph in others for path in input_files(graph, input_dir)}
+        for path in input_files(prompt_graph, input_dir):
+            if path in needed:
+                continue
             try:
                 path.unlink()
             except OSError as error:
                 LOGGER.warning("Input cleanup skipped %s: %s", path.name, error)
-        if not other_jobs_active():
+        # Previews of this job live in temp and are fetched after the node runs.
+        has_preview = any("Preview" in str(n.get("class_type")) for n in prompt_graph.values() if isinstance(n, dict))
+        if not others and not has_preview:
             clear_dir(folder_paths.get_temp_directory())
     except Exception as error:
         LOGGER.warning("Discord cleanup failed: %s", error)
