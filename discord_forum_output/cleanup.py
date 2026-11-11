@@ -41,12 +41,18 @@ def clear_dir(directory) -> None:
             child.unlink(missing_ok=True)
 
 
-def other_prompts(prompt_graph):
-    """Graphs of every other running or queued job, or None if the queue is unreadable."""
+def other_prompts():
+    """Graphs of every other running or queued job, or None if that cannot be told.
+
+    The queue holds deep copies, so the current job is matched by prompt_id
+    (from ComfyUI's executing-context), never by object identity.
+    """
     try:
+        from comfy_execution.utils import get_executing_context
         from server import PromptServer
+        prompt_id = get_executing_context().prompt_id
         running, pending = PromptServer.instance.prompt_queue.get_current_queue()
-        return [item[2] for item in (*running, *pending) if item[2] is not prompt_graph]
+        return [item[2] for item in (*running, *pending) if item[1] != prompt_id]
     except Exception:
         return None
 
@@ -55,7 +61,7 @@ def cleanup(prompt_graph) -> None:
     """Delete the job's input images, then temp if idle. Never raises."""
     try:
         import folder_paths
-        others = other_prompts(prompt_graph)
+        others = other_prompts()
         if others is None:  # cannot tell what else needs these files: delete nothing
             return
         input_dir = folder_paths.get_input_directory()

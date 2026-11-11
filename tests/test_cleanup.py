@@ -103,17 +103,22 @@ class CleanupTest(unittest.TestCase):
             result = self.run_node(self.graph("rsg-inpaint/a.png"))
         self.assertEqual(node_result(result)[1:], (1, 0))
 
-    def test_other_prompts_excludes_current_job_and_includes_the_rest(self):
-        current, other, queued = {"c": 1}, {"o": 1}, {"q": 1}
-        queue = types.SimpleNamespace(get_current_queue=lambda: ([(0, "a", current, {}, [])], [(1, "b", queued, {}, [])]))
-        running_other = types.SimpleNamespace(get_current_queue=lambda: ([(0, "a", current, {}, []), (1, "x", other, {}, [])], []))
-        for q, expected in ((queue, [queued]), (running_other, [other])):
-            server = types.SimpleNamespace(PromptServer=types.SimpleNamespace(instance=types.SimpleNamespace(prompt_queue=q)))
-            with patch.dict(sys.modules, {"server": server}):
-                self.assertEqual(mod.other_prompts(current), expected)
+    def test_other_prompts_matches_current_job_by_prompt_id_not_identity(self):
+        other, queued = {"o": 1}, {"q": 1}
+        # the queue holds copies of the current job, as ComfyUI's PromptQueue does
+        for running, pending, expected in (
+            ([(0, "me", {"c": 1}, {}, [])], [(1, "b", queued, {}, [])], [queued]),
+            ([(0, "me", {"c": 1}, {}, []), (1, "x", other, {}, [])], [], [other]),
+            ([(0, "me", {"c": 1}, {}, [])], [], []),
+        ):
+            queue = types.SimpleNamespace(get_current_queue=lambda r=running, p=pending: (r, p))
+            server = types.SimpleNamespace(PromptServer=types.SimpleNamespace(instance=types.SimpleNamespace(prompt_queue=queue)))
+            execution = types.SimpleNamespace(get_executing_context=lambda: types.SimpleNamespace(prompt_id="me"))
+            with patch.dict(sys.modules, {"server": server, "comfy_execution": types.ModuleType("comfy_execution"), "comfy_execution.utils": execution}):
+                self.assertEqual(mod.other_prompts(), expected)
 
     def test_unreadable_queue_returns_none(self):
-        self.assertIsNone(mod.other_prompts({}))
+        self.assertIsNone(mod.other_prompts())
 
 
 if __name__ == "__main__":
