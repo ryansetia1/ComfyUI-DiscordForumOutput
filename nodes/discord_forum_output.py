@@ -4,6 +4,7 @@ import logging
 import re
 import traceback
 
+from ..discord_forum_output.cleanup import cleanup
 from ..discord_forum_output.caption import render_caption
 from ..discord_forum_output.config import ConfigError, load_settings, resolve_destination, resolve_tags
 from ..discord_forum_output.image_encoder import ImageEncodingError, encode_image
@@ -36,7 +37,8 @@ class DiscordForumOutput:
             "image_format": (["png", "jpeg"], {"default": "png"}), "jpeg_quality": ("INT", {"default": 95, "min": 1, "max": 100}),
             "caption_enabled": ("BOOLEAN", {"default": True}),
             "new_thread_title": ("STRING", {"default": ""}), "forum_tag_aliases": ("STRING", {"default": ""}),
-        }, "hidden": {"prompt_graph": "PROMPT", "unique_id": "UNIQUE_ID"}}
+        }, "optional": {"cleanup_after_send": ("BOOLEAN", {"default": True})},
+        "hidden": {"prompt_graph": "PROMPT", "unique_id": "UNIQUE_ID"}}
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -52,7 +54,7 @@ class DiscordForumOutput:
             return "new_thread_title is required for new_forum_post"
         return True
 
-    def send(self, images, destination_alias="", delivery_mode="existing_thread", batch_mode="one_message_per_image", image_format="png", jpeg_quality=95, caption_enabled=True, prompt="", seed=0, model_or_checkpoint="", steps=0, cfg=0.0, sampler="", scheduler="", new_thread_title="", forum_tag_aliases="", existing_thread_id="", prompt_graph=None, unique_id=None, loras=None, duration=None, generation_duration=None, **kwargs):
+    def send(self, images, destination_alias="", delivery_mode="existing_thread", batch_mode="one_message_per_image", image_format="png", jpeg_quality=95, caption_enabled=True, prompt="", seed=0, model_or_checkpoint="", steps=0, cfg=0.0, sampler="", scheduler="", new_thread_title="", forum_tag_aliases="", existing_thread_id="", prompt_graph=None, unique_id=None, loras=None, duration=None, generation_duration=None, cleanup_after_send=True, **kwargs):
         uploaded = failed = 0
         notes: list[str] = []
         try:
@@ -124,6 +126,8 @@ class DiscordForumOutput:
                 unit.clear()
         if image_format == "png":
             notes.append("jpeg_quality ignored for PNG")
+        if cleanup_after_send and uploaded and not failed:
+            cleanup(prompt_graph)
         return self._result(uploaded, failed, "; ".join(notes))
 
     @staticmethod

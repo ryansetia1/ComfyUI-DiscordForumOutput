@@ -81,3 +81,7 @@ Run the mocked, in-memory test suite with ComfyUI's virtualenv:
 
 System Python does not include ComfyUI's Torch and Pillow dependencies, so use
 that virtualenv for tests and import checks.
+
+## Cleanup after send
+
+With `cleanup_after_send` on (default), once every image was delivered the node deletes the input files read by the graph's `LoadImage`, `LoadImageMask` and `AILab_LoadImage` nodes (inside ComfyUI's `input/` only, subfolders allowed) and clears `temp/` when no other job is running or queued. Any delivery failure skips cleanup entirely; cleanup errors are logged and never change the Discord result.
