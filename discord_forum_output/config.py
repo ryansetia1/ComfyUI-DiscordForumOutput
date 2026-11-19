@@ -27,7 +27,7 @@ class Settings:
     max_upload_bytes: int = 8 * 1024 * 1024
     max_attachments_per_request: int = 10
     caption_max_chars: int = 1800
-    request_timeout_seconds: int = 30
+    request_timeout_seconds: int = 120
     max_transient_retries: int = 2
 
     def redact(self, value: object) -> str:
@@ -150,7 +150,7 @@ def load_settings(config_path: Path = LOCAL_CONFIG, environ: dict[str, str] | No
         max_upload_bytes=_positive(limits, "max_upload_bytes", 8 * 1024 * 1024, 20 * 1024 * 1024),
         max_attachments_per_request=_positive(limits, "max_attachments_per_request", 10, 10),
         caption_max_chars=_positive(limits, "caption_max_chars", 1800, 2000),
-        request_timeout_seconds=_positive(limits, "request_timeout_seconds", 30, 300),
+        request_timeout_seconds=_positive(limits, "request_timeout_seconds", 120, 300),
         max_transient_retries=_positive(limits, "max_transient_retries", 2, 10),
     )
 

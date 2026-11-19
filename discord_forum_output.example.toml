@@ -7,7 +7,7 @@ url_env = "COMFY_DISCORD_FORUM_WEBHOOK_URL"
 max_upload_bytes = 8388608
 max_attachments_per_request = 10
 caption_max_chars = 1800
-request_timeout_seconds = 30
+request_timeout_seconds = 120
 max_transient_retries = 2
 
 [destinations]
