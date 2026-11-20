@@ -7,7 +7,7 @@ import traceback
 from ..discord_forum_output.cleanup import schedule as schedule_cleanup
 from ..discord_forum_output.caption import render_caption
 from ..discord_forum_output.config import ConfigError, load_settings, resolve_destination, resolve_tags
-from ..discord_forum_output.image_encoder import ImageEncodingError, encode_image
+from ..discord_forum_output.image_encoder import ImageEncodingError, encode_image, png_metadata
 from ..discord_forum_output.prompt_metadata import (
     RuntimeMetadata,
     ensure_execution_timer_hook,
@@ -38,7 +38,7 @@ class DiscordForumOutput:
             "caption_enabled": ("BOOLEAN", {"default": True}),
             "new_thread_title": ("STRING", {"default": ""}), "forum_tag_aliases": ("STRING", {"default": ""}),
         }, "optional": {"cleanup_after_send": ("BOOLEAN", {"default": True})},
-        "hidden": {"prompt_graph": "PROMPT", "unique_id": "UNIQUE_ID"}}
+        "hidden": {"prompt_graph": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"}}
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -54,7 +54,7 @@ class DiscordForumOutput:
             return "new_thread_title is required for new_forum_post"
         return True
 
-    def send(self, images, destination_alias="", delivery_mode="existing_thread", batch_mode="one_message_per_image", image_format="png", jpeg_quality=95, caption_enabled=True, prompt="", seed=0, model_or_checkpoint="", steps=0, cfg=0.0, sampler="", scheduler="", new_thread_title="", forum_tag_aliases="", existing_thread_id="", prompt_graph=None, unique_id=None, loras=None, duration=None, generation_duration=None, cleanup_after_send=True, **kwargs):
+    def send(self, images, destination_alias="", delivery_mode="existing_thread", batch_mode="one_message_per_image", image_format="png", jpeg_quality=95, caption_enabled=True, prompt="", seed=0, model_or_checkpoint="", steps=0, cfg=0.0, sampler="", scheduler="", new_thread_title="", forum_tag_aliases="", existing_thread_id="", prompt_graph=None, extra_pnginfo=None, unique_id=None, loras=None, duration=None, generation_duration=None, cleanup_after_send=True, **kwargs):
         uploaded = failed = 0
         notes: list[str] = []
         try:
@@ -85,9 +85,10 @@ class DiscordForumOutput:
                 details = "; ".join(f"image {index}: new_thread_title including batch suffix must be 1-{TITLE_MAX} characters" for index in invalid)
                 return self._result(0, batch_size, details)
         encoded: list[tuple[int, object]] = []
+        pnginfo = png_metadata(prompt_graph, extra_pnginfo) if image_format == "png" else None
         for index in range(images.shape[0]):
             try:
-                item = encode_image(images[index], index + 1, image_format, jpeg_quality)
+                item = encode_image(images[index], index + 1, image_format, jpeg_quality, pnginfo)
                 if len(item.data) > settings.max_upload_bytes:
                     item.data = b""
                     raise ImageEncodingError(f"exceeds {settings.max_upload_bytes // (1024 * 1024)} MiB")

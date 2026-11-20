@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import io
+import json
 from dataclasses import dataclass
 
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 
 
 class ImageEncodingError(ValueError):
@@ -21,7 +23,27 @@ class EncodedImage:
     alpha_dropped: bool = False
 
 
-def encode_image(item, index: int, image_format: str, jpeg_quality: int) -> EncodedImage:
+def _metadata_disabled() -> bool:
+    try:
+        from comfy.cli_args import args
+        return bool(getattr(args, "disable_metadata", False))
+    except Exception:
+        return False
+
+
+def png_metadata(prompt=None, extra_pnginfo=None) -> PngInfo | None:
+    """Same text chunks as ComfyUI's SaveImage, so dragging the PNG back in restores the workflow."""
+    if _metadata_disabled() or (prompt is None and not extra_pnginfo):
+        return None
+    info = PngInfo()
+    if prompt is not None:
+        info.add_text("prompt", json.dumps(prompt))
+    for key, value in (extra_pnginfo or {}).items():
+        info.add_text(key, json.dumps(value))
+    return info
+
+
+def encode_image(item, index: int, image_format: str, jpeg_quality: int, pnginfo: PngInfo | None = None) -> EncodedImage:
     if getattr(item, "ndim", None) != 3 or item.shape[0] < 1 or item.shape[1] < 1 or item.shape[2] not in (3, 4):
         raise ImageEncodingError("image must have non-empty [H,W,3] or [H,W,4] dimensions")
     if not hasattr(item, "is_floating_point"):
@@ -47,7 +69,7 @@ def encode_image(item, index: int, image_format: str, jpeg_quality: int) -> Enco
         if image_format == "jpeg":
             image.save(output, format="JPEG", quality=jpeg_quality, optimize=False)
         else:
-            image.save(output, format="PNG", compress_level=6)
+            image.save(output, format="PNG", compress_level=6, pnginfo=pnginfo)
         data = output.getvalue()
     finally:
         output.close()

@@ -30,6 +30,10 @@ specify `new_thread_title`, and optionally add comma-separated `forum_tag_aliase
 The default sends one message per image. `single_message` sends one multipart
 request only when every image passes the 8 MiB guard and the attachment limit.
 PNG and JPEG are encoded with Pillow in memory; JPEG drops alpha.
+PNG uploads embed the ComfyUI `prompt` and `workflow` text chunks (like the built-in
+Save Image node), so a PNG downloaded from Discord can be dragged back into ComfyUI
+to restore the full graph. JPEG carries no workflow. `--disable-metadata` is honored.
+Download the original attachment (Open in Browser), not the resized preview.
 
 ### Automatic generation metadata
 
