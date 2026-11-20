@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 import unittest
@@ -22,7 +23,7 @@ spec.loader.exec_module(package)
 
 from discord_forum_node.discord_forum_output.caption import render_caption
 from discord_forum_node.discord_forum_output.config import ConfigError, Settings, load_settings, redact, resolve_destination
-from discord_forum_node.discord_forum_output.image_encoder import EncodedImage, ImageEncodingError, encode_image
+from discord_forum_node.discord_forum_output.image_encoder import EncodedImage, ImageEncodingError, encode_image, png_metadata
 from discord_forum_node.discord_forum_output.prompt_metadata import extract_metadata
 from discord_forum_node.discord_forum_output.webhook_client import DeliveryError, HttpResponse, WebhookClient
 from discord_forum_node.nodes.discord_forum_output import DiscordForumOutput
@@ -50,7 +51,7 @@ class ComponentsTest(unittest.TestCase):
         self.assertEqual(schema["images"][0], "IMAGE")
         self.assertIn("destination_alias", schema)
         self.assertNotIn("existing_thread_id", schema)
-        self.assertEqual(node.INPUT_TYPES()["hidden"], {"prompt_graph": "PROMPT", "unique_id": "UNIQUE_ID"})
+        self.assertEqual(node.INPUT_TYPES()["hidden"], {"prompt_graph": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO", "unique_id": "UNIQUE_ID"})
         self.assertTrue({"prompt", "seed", "model_or_checkpoint", "steps", "cfg", "sampler", "scheduler"}.isdisjoint(schema))
 
     def test_runtime_metadata_uses_connected_standard_ksampler_and_resolved_seed(self):
@@ -181,6 +182,26 @@ class ComponentsTest(unittest.TestCase):
         self.assertEqual(Image.open(io.BytesIO(jpeg.data)).mode, "RGB")
         with self.assertRaises(ImageEncodingError): encode_image(torch.zeros((1, 1, 2)), 1, "png", 95)
         with self.assertRaises(ImageEncodingError): encode_image(torch.tensor([[[float("nan"), 0, 0]]]), 1, "png", 95)
+
+    def test_png_embeds_comfy_workflow_metadata(self):
+        graph, workflow = {"1": {"class_type": "KSampler", "inputs": {}}}, {"nodes": [{"id": 1}], "links": []}
+        png = encode_image(torch.zeros((2, 2, 3)), 1, "png", 95, png_metadata(graph, {"workflow": workflow}))
+        text = Image.open(io.BytesIO(png.data)).text
+        self.assertEqual(json.loads(text["prompt"]), graph)
+        self.assertEqual(json.loads(text["workflow"]), workflow)
+        self.assertIsNone(png_metadata(None, None))
+        self.assertEqual(Image.open(io.BytesIO(encode_image(torch.zeros((2, 2, 3)), 1, "png", 95).data)).text, {})
+
+    def test_node_sends_png_with_workflow(self):
+        graph = {"discord": {"class_type": "DiscordForumOutput", "inputs": {}}}
+        sent = []
+        class Client:
+            def __init__(self, _settings): pass
+            def send(self, images, _caption, **_kwargs): sent.extend(Image.open(io.BytesIO(i.data)).text for i in images)
+        with patch("discord_forum_node.nodes.discord_forum_output.load_settings", return_value=settings()), patch("discord_forum_node.nodes.discord_forum_output.WebhookClient", Client):
+            DiscordForumOutput().send(torch.zeros((1, 2, 2, 3)), "x", caption_enabled=False, prompt_graph=graph, extra_pnginfo={"workflow": {"nodes": []}}, unique_id="discord", cleanup_after_send=False)
+        self.assertEqual(json.loads(sent[0]["prompt"]), graph)
+        self.assertEqual(json.loads(sent[0]["workflow"]), {"nodes": []})
 
     def test_caption_order_limit_and_no_mention_payload(self):
         caption = render_caption(prompt="  hello   @everyone ", seed=0, model_or_checkpoint="/models/a.safetensors", width=10, height=20, steps=5, cfg=7.0, sampler="Euler", scheduler="normal", maximum=1800)
